@@ -5,11 +5,16 @@
 
 <img src="Photos/STEPFOC PCB.png" alt="drawing" width="5000"/>
 
+**STEPFOC** is a stepper motor controller designed to deliver affordable, high-performance hardware paired with powerful open-source software. Its mission is to transform low-cost stepper motors into high-performance robotic servos, enabling advanced robotics applications without the high price tag.
 
-Spectral Micro is a brushless motor controller designed to offer affordable and capable hardware, complemented by open-source software. 
-* It supports multiple firmware options and integrates a 14-bit magnetic encoder, inline current sensing, CAN and UART data interface, and provides support for position, velocity, torque, and impedance control.
-* Everything you need for developing high-performance robotic solutions is included.
-* It is ideal for gimbal motors, quadrupeds, robotic arms, and grippers. Check the list of tested motors [here!](https://source-robotics.github.io/Spectral-BLDC-docs/apage9_3_tested_motors/)
+The controller features a 14-bit magnetic encoder, inline current sensing, CAN and UART interfaces, and supports position, velocity, torque, and impedance control modes.
+
+> [!NOTE]
+> Optimized for NEMA17 format but it can also be attached to nema 23 and 14 steppers!
+
+
+> [!IMPORTANT]
+>     **STEPFOC stepper driver is built on the same hardware and software foundation as the Spectral Micro BLDC driver. As a result, some references or images in this documentation may still show the Spectral Micro, since both drivers share about 99% of their features. They also use the same CAN and UART command sets, with only minor differences in UART-based calibration and setup procedures.**
 
 # Where to buy?
 
