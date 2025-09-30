@@ -16,27 +16,25 @@ The controller features a 14-bit magnetic encoder, inline current sensing, CAN a
 > [!IMPORTANT]
 >     **STEPFOC stepper driver is built on the same hardware and software foundation as the Spectral Micro BLDC driver. As a result, some references or images in this documentation may still show the Spectral Micro, since both drivers share about 99% of their features. They also use the same CAN and UART command sets, with only minor differences in UART-based calibration and setup procedures.**
 
-# Where to buy?
+# Where to buy? **(Available soon)**
 
-You can buy the Spectral Micro BLDC controller here: <br />
+You can buy the STEPFOC stepper controller here: <br />
  https://source-robotics.com/products/spectral-micro-bldc-controller
 
 # Firmware 
-Spectral firmware is located [here](https://github.com/PCrnjak/Spectral-Micro-BLDC-controller/tree/main/Spectral%20BLDC%20Firmware). To install it follow [this guide!](https://source-robotics.github.io/Spectral-BLDC-docs/apage3_flashing_firmware/)
+STEPFOC firmware is located [here](https://github.com/PCrnjak/STEPFOC-stepper-controller/tree/main/STEPFOC%20firmware). To install it follow [this guide!](https://source-robotics.github.io/STEPFOC-docs/flashing_firmware/)
 
 
 # Documentation:
 
 - [Official website](https://source-robotics.com/products/spectral-micro-bldc-controller)
-- [DOCS](https://source-robotics.github.io/Spectral-BLDC-docs/) Offers great starting guides with project examples + code 
+- [DOCS](https://source-robotics.github.io/STEPFOC-docs/) Offers great starting guides with project examples + code 
 
 
 # API and control
 - [GUI software ](https://github.com/PCrnjak/Spectral-motor-GUI)
 - [Python API & Examples](https://github.com/PCrnjak/Spectral-BLDC-Python/tree/main)
 - [Source Robotics toolbox](https://github.com/PCrnjak/Source-Robotics-Toolbox/tree/main) 
-- [SimpleFOC port](https://github.com/PCrnjak/Spectral-Micro-Simple-FOC-)
-- **Early stage**: [Arduino](https://github.com/PCrnjak/SpectralMicroArduino), [ROS2](https://github.com/PCrnjak/SpectralMicroROS2)
 
 # More about Spectral BLDC motor controllers
 
