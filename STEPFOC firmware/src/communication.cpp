@@ -20,6 +20,7 @@
 /* Includes ------------------------------------------------------------------*/
 
 #include "communication.h"
+#include "bootloader_config.h"
 
 SerialPacketParser parser;
 char command[20];
@@ -554,7 +555,7 @@ void UART_protocol(Stream &Serialport)
             // Reset MCU
             else if (strcmp(command, "Reset") == 0)
             {
-                NVIC_SystemReset();
+                Bootloader_ResetIntoBootloader();
             }
 
             // Set Iq current limit

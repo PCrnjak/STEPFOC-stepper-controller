@@ -18,6 +18,7 @@
 #include "EEPROM.h"
 #include "CAN.h"
 #include "communication_CAN.h"
+#include "bootloader_config.h"
 
 // Define serial port
 #define Serial Serialx
@@ -29,6 +30,8 @@ ADC_HandleTypeDef hadc1;
 
 void setup()
 {
+  Bootloader_SetVectorTable();
+
   SPI.setMOSI(MOSI);
   SPI.setMISO(MISO);
   SPI.setSCLK(CLK);
