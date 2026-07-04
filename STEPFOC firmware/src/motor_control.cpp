@@ -97,6 +97,13 @@ void Collect_data()
   controller.Sense1_mA = -Get_current_mA(controller.Sense1_Raw);
   controller.Sense2_mA = Get_current_mA(controller.Sense2_Raw);
 
+  // Reversed wiring compensated as a phase-B negation (a guaranteed reflection; see Phase_order):
+  // negate the phase-B current measurement so the FOC sees a normally-wired motor.
+  if (controller.commutation_dir < 0)
+  {
+    controller.Sense2_mA = -controller.Sense2_mA;
+  }
+
   controller.VBUS_mV = Get_voltage_mA(controller.VBUS_RAW);
   /***********************************/
 
@@ -202,6 +209,13 @@ void Collect_data2()
 
   controller.Sense1_mA = -Get_current_mA(controller.Sense1_Raw);
   controller.Sense2_mA = Get_current_mA(controller.Sense2_Raw);
+
+  // Reversed wiring compensated as a phase-B negation (a guaranteed reflection; see Phase_order):
+  // negate the phase-B current measurement so the FOC sees a normally-wired motor.
+  if (controller.commutation_dir < 0)
+  {
+    controller.Sense2_mA = -controller.Sense2_mA;
+  }
 
   controller.VBUS_mV = Get_voltage_mA(controller.VBUS_RAW);
   /***********************************/
@@ -809,6 +823,350 @@ int Calibrate_Angle_Offset2()
   return CALIB_IN_PROGRESS;
 }
 
+/// @brief Apply a static DC field vector at a fixed electrical angle to lock the rotor.
+/// Pure +Ud (Uq = 0) pulls the rotor d-axis to 'angle'. Position_Raw is assumed already
+/// refreshed by the caller's Collect_data() this tick.
+static void Align_apply_field(float angle, int voltage_mV)
+{
+  sine_cosine_calc(angle); // sets FOC.sine_value / FOC.cosine_value used by inverse_park
+  PID.Ud_setpoint = voltage_mV;
+  PID.Uq_setpoint = 0;
+  Voltage_Torque_mode();
+}
+
+/// @brief theta_offset that makes Electric_Angle == lock_angle at the current encoder position.
+/// Uses the same commutation_dir-aware base angle as Collect_data(), so it is correct for
+/// commutation_dir = +1 and -1 alike.
+static float Align_read_offset(float lock_angle)
+{
+  int32_t bt = ((int32_t)controller.Position_Raw * controller.pole_pairs) % CPR;
+  bt = (bt + CPR) % CPR;
+  float theta_base = RAD_CONST * bt;
+  float off = lock_angle - theta_base;
+  while (off < 0)
+    off += PI2;
+  while (off >= PI2)
+    off -= PI2;
+  return off;
+}
+
+/// @brief Non-blocking rotor-alignment angle-offset calibration (Method A).
+/// Locks the rotor to a known electrical angle with a DC field (no spinning), reads the
+/// encoder, and derives theta_offset directly. Approaches the lock from both sides and
+/// averages to cancel static friction/cogging bias, then verifies that +Iq drives the
+/// encoder forward (the +Iq -> +encoder invariant). Direction-agnostic; unlike the
+/// velocity-symmetry search it has a single stable solution per electrical cycle.
+/// @return 0 in progress, 1 done (theta_offset set), -1 failed
+int Calibrate_Angle_Offset_Align()
+{
+  enum { IN_PROGRESS = 0, DONE = 1, FAILED = -1 };
+
+  // --- config ---
+  const float LOCK_ANGLE = 0.0f;       // electrical angle we lock the rotor to
+  const float DELTA = 0.6f;            // approach offset (elec rad) for both-sides averaging
+  const int approach_cycles = 4000;    // ~0.64 s to drag the rotor to the approach angle
+  const int settle_cycles = 8000;      // ~1.28 s to settle on the lock angle
+  const int verify_settle = 6000;      // settle before measuring the verify velocity
+  const int verify_measure = 300;      // velocity averaging window
+  const float fwd_threshold = 1000.0f; // min |velocity| (ticks/s) to count as "spinning"
+  const int MAX_CYCLES = 500000;       // ~80 s hard timeout for the lock+verify stages
+
+  // symmetry refine (after the lock): DETERMINISTIC sweep of theta_offset around the lock seed.
+  // Sample the fwd/rev speed gap at a fixed grid of offsets and keep the minimum. No gradient walk,
+  // so it cannot thrash on measurement noise or land differently each run -- same result every time,
+  // for commutation_dir = +-1 alike. Coarse pass finds the region; fine pass refines the coarse best.
+  int trim_current = controller.calibration_offset_current; // steady-state, proven drive level
+  const int trim_settle = 6000;        // ~1 s: speed steady (incl. after reversal) before measuring
+  const int trim_measure = 300;        // velocity averaging window
+  const float coarse_half = 0.45f;     // coarse sweep spans seed +- 0.45 rad
+  const float coarse_step = 0.09f;     // -> 11 coarse points (index 0..10)
+  const int coarse_points = 10;        // last coarse index
+  const float fine_half = 0.09f;       // fine sweep spans coarse-best +- 0.09 rad
+  const float fine_step = 0.02f;       // -> 10 fine points, ~0.02 rad final resolution
+  const int fine_points = 9;           // last fine index
+
+  static int st = 0;
+  static int cnt = 0;
+  static int cyc = 0;
+  static int retry = 0;
+  static float off_a = 0.0f;
+  static float off_b = 0.0f;
+  static float vel_accum = 0.0f;
+  static int lock_v = 0;
+
+  // sweep state
+  static float sweep_center = 0.0f;
+  static int sweep_index = 0;
+  static int sweep_stage = 0; // 0 = coarse, 1 = fine
+  static float best_off = 0.0f;
+  static float best_gap = 0.0f;
+  static float best_vfwd = 0.0f;
+  static float best_vrev = 0.0f;
+  static float vfwd_t = 0.0f;
+
+  cyc++;
+  if (cyc > MAX_CYCLES && st < 8) // timeout guards only the lock+verify stages; the trim is iteration-bounded
+  {
+    PID.Ud_setpoint = 0;
+    PID.Uq_setpoint = 0;
+    PID.Id_setpoint = 0;
+    PID.Iq_setpoint = 0;
+    st = cnt = cyc = retry = 0;
+    off_a = off_b = vel_accum = 0.0f;
+    lock_v = 0;
+    return FAILED;
+  }
+
+  switch (st)
+  {
+  case 0: // init: derive lock voltage from measured resistance, clamp to a safe band
+    lock_v = (int)((float)controller.calibration_offset_current * controller.Total_Resistance); // mA * ohm = mV
+    if (lock_v < 500)
+      lock_v = 500;
+    if (lock_v > 4000)
+      lock_v = 4000;
+    cnt = 0;
+    st = 1;
+    break;
+
+  case 1: // approach the lock angle from below
+    Align_apply_field(LOCK_ANGLE - DELTA + PI2, lock_v);
+    if (++cnt >= approach_cycles)
+    {
+      cnt = 0;
+      st = 2;
+    }
+    break;
+
+  case 2: // settle on the lock angle, then record offset A
+    Align_apply_field(LOCK_ANGLE, lock_v);
+    if (++cnt >= settle_cycles)
+    {
+      off_a = Align_read_offset(LOCK_ANGLE);
+      cnt = 0;
+      st = 3;
+    }
+    break;
+
+  case 3: // approach the lock angle from above
+    Align_apply_field(LOCK_ANGLE + DELTA, lock_v);
+    if (++cnt >= approach_cycles)
+    {
+      cnt = 0;
+      st = 4;
+    }
+    break;
+
+  case 4: // settle on the lock angle, then record offset B
+    Align_apply_field(LOCK_ANGLE, lock_v);
+    if (++cnt >= settle_cycles)
+    {
+      off_b = Align_read_offset(LOCK_ANGLE);
+      cnt = 0;
+      st = 5;
+    }
+    break;
+
+  case 5: // circular-average the two offsets and commit
+  {
+    float d = off_b - off_a;
+    while (d > PI)
+      d -= PI2;
+    while (d < -PI)
+      d += PI2;
+    float off = off_a + d * 0.5f;
+    if (off < 0)
+      off += PI2;
+    if (off >= PI2)
+      off -= PI2;
+    controller.theta_offset = off;
+    controller.aligned_angle = off; // telemetry
+    PID.Ud_setpoint = 0;
+    PID.Uq_setpoint = 0;
+    vel_accum = 0.0f;
+    cnt = 0;
+    st = 6;
+    break;
+  }
+
+  case 6: // verify: apply +Iq and let it settle
+    PID.Id_setpoint = 0;
+    PID.Iq_current_limit = 1600;
+    PID.Iq_setpoint = controller.calibration_offset_current;
+    Torque_mode();
+    if (++cnt >= verify_settle)
+    {
+      cnt = 0;
+      st = 7;
+    }
+    break;
+
+  case 7: // verify: average velocity under +Iq, enforce +Iq -> +encoder
+    PID.Iq_setpoint = controller.calibration_offset_current;
+    Torque_mode();
+    vel_accum += controller.Velocity_Filter;
+    if (++cnt >= verify_measure)
+    {
+      float vfwd = vel_accum / verify_measure;
+      controller.Velocity_fwd = (int)vfwd; // telemetry
+      PID.Iq_setpoint = 0;
+      PID.Id_setpoint = 0;
+
+      if (vfwd > fwd_threshold)
+      {
+        // +Iq -> +encoder confirmed; refine with the measured-direction symmetry search (keep-best)
+        cnt = 0;
+        st = 8;
+      }
+      else if (vfwd < -fwd_threshold && retry == 0)
+      {
+        // +Iq -> -encoder: 180-deg reference, flip once and re-verify
+        controller.theta_offset += PI;
+        if (controller.theta_offset >= PI2)
+          controller.theta_offset -= PI2;
+        controller.aligned_angle = controller.theta_offset;
+        retry = 1;
+        vel_accum = 0.0f;
+        cnt = 0;
+        st = 6;
+      }
+      else
+      {
+        // still reversed after a flip, or not spinning at all -> fail
+        st = cnt = cyc = retry = 0;
+        off_a = off_b = vel_accum = 0.0f;
+        lock_v = 0;
+        return FAILED;
+      }
+    }
+    break;
+
+  case 8: // sweep init: center the grid on the lock's offset, start the coarse pass
+    PID.Iq_current_limit = 1600;
+    sweep_center = controller.theta_offset;
+    sweep_stage = 0;
+    sweep_index = 0;
+    best_gap = 1e12f;
+    best_off = controller.theta_offset;
+    best_vfwd = 0.0f;
+    best_vrev = 0.0f;
+    controller.theta_offset = sweep_center - coarse_half; // first coarse point
+    if (controller.theta_offset < 0)
+      controller.theta_offset += PI2;
+    vel_accum = 0.0f;
+    cnt = 0;
+    st = 9;
+    break;
+
+  case 9: // sweep: settle under +Iq at the current grid offset
+    PID.Id_setpoint = 0;
+    PID.Iq_setpoint = trim_current;
+    Torque_mode();
+    if (++cnt >= trim_settle)
+    {
+      cnt = 0;
+      vel_accum = 0.0f;
+      st = 10;
+    }
+    break;
+
+  case 10: // sweep: measure forward speed
+    PID.Iq_setpoint = trim_current;
+    Torque_mode();
+    vel_accum += controller.Velocity_Filter;
+    if (++cnt >= trim_measure)
+    {
+      vfwd_t = vel_accum / trim_measure;
+      cnt = 0;
+      st = 11;
+    }
+    break;
+
+  case 11: // sweep: settle under -Iq
+    PID.Iq_setpoint = -trim_current;
+    Torque_mode();
+    if (++cnt >= trim_settle)
+    {
+      cnt = 0;
+      vel_accum = 0.0f;
+      st = 12;
+    }
+    break;
+
+  case 12: // sweep: measure reverse speed, record the gap, advance the grid
+  {
+    PID.Iq_setpoint = -trim_current;
+    Torque_mode();
+    vel_accum += controller.Velocity_Filter;
+    if (++cnt >= trim_measure)
+    {
+      float vrev_t = vel_accum / trim_measure;
+      float gap = fabs(vfwd_t + vrev_t); // 0 when |fwd| == |rev|
+      cnt = 0;
+
+      if (gap < best_gap)
+      {
+        best_gap = gap;
+        best_off = controller.theta_offset;
+        best_vfwd = vfwd_t;
+        best_vrev = vrev_t;
+      }
+
+      sweep_index++;
+
+      if (sweep_stage == 0)
+      {
+        if (sweep_index <= coarse_points)
+        {
+          controller.theta_offset = sweep_center - coarse_half + sweep_index * coarse_step;
+        }
+        else
+        {
+          // coarse pass done -> fine pass around the coarse best
+          sweep_stage = 1;
+          sweep_index = 0;
+          sweep_center = best_off;
+          controller.theta_offset = sweep_center - fine_half;
+        }
+      }
+      else // fine pass
+      {
+        if (sweep_index <= fine_points)
+        {
+          controller.theta_offset = sweep_center - fine_half + sweep_index * fine_step;
+        }
+        else
+        {
+          // done: commit the best offset found (deterministic, same every run)
+          controller.theta_offset = best_off;
+          controller.aligned_angle = best_off;
+          controller.Velocity_fwd = (int)best_vfwd; // telemetry: symmetry at the committed offset
+          controller.Velocity_bwd = (int)best_vrev;
+          PID.Iq_setpoint = 0;
+          PID.Id_setpoint = 0;
+          st = cnt = cyc = retry = 0;
+          off_a = off_b = vel_accum = 0.0f;
+          lock_v = 0;
+          sweep_index = 0;
+          sweep_stage = 0;
+          return DONE;
+        }
+      }
+
+      if (controller.theta_offset < 0)
+        controller.theta_offset += PI2;
+      if (controller.theta_offset >= PI2)
+        controller.theta_offset -= PI2;
+
+      st = 9; // measure the next grid point
+    }
+    break;
+  }
+  }
+
+  return IN_PROGRESS;
+}
+
 /// @brief run calibration routine
 /// Will exit if there is an error and report it
 void Update_IT_callback_calib()
@@ -1004,6 +1362,9 @@ Open loop spin; check if we spin in good direction, if not fail and prompt user 
     if (open_loop_start == 0)
     {
       open_loop_start = 1;
+      // Detect the wiring from the UN-swapped state, otherwise a board already saved as
+      // reversed would spin with the software swap active and mis-detect its own wiring.
+      controller.commutation_dir = 1;
     }
 
     // Read the position here after it becomes stable; we introduce small delay = 20000 * LOOP_TIME
@@ -1031,21 +1392,15 @@ Open loop spin; check if we spin in good direction, if not fail and prompt user 
     {
       // Collect_data();
       int end_position = controller.Position_Ticks;
-      // If our end position is smaller than the start
-      if (end_position < start_position)
-      {
-
-        controller.Open_loop_cal_status = 1;
-        controller.Calib_error = 1;
-        calib_dir_pole_pair = 0;
-      }
-      else
-      {
-
-        controller.Open_loop_cal_status = 2;
-        calib_dir_pole_pair = 1;
-        controller.Calib_error = 0;
-      }
+      // Detect phase-wiring handedness instead of failing on reversed wiring.
+      // The open loop commanded a forward (increasing) electrical angle, so the sign
+      // of the encoder response tells us which commutation_dir makes +Iq => +encoder.
+      // encoder went forward  -> standard map is correct        -> +1
+      // encoder went backward -> phases are reversed, flip angle -> -1
+      controller.commutation_dir = (end_position >= start_position) ? 1 : -1;
+      controller.Open_loop_cal_status = 2;
+      calib_dir_pole_pair = 1;
+      controller.Calib_error = 0;
     }
   }
 
@@ -1101,14 +1456,17 @@ Check if the phase order is correct
         int delta = end_position - start_position;
         int half_rotation_ticks = CPR / 2;
 
-        if (delta > half_rotation_ticks)
+        // Direction-agnostic: only confirm the motor actually turned (commutation works).
+        // The correct sense (+Iq -> +encoder) is enforced later by the lock's verify step,
+        // so we must NOT fail / tell the user to swap phases here.
+        if (abs(delta) > half_rotation_ticks)
         {
-          // ✅ spun forward, enough distance
+          // ✅ spun far enough (either direction)
           Phase_step = 3;
         }
         else
         {
-          // ❌ wrong direction or just vibrating
+          // ❌ barely moved -> commutation genuinely not working
           controller.Calib_error = 1;
           PID.Uq_setpoint = 0;
           Voltage_Torque_mode();
@@ -1136,7 +1494,7 @@ Check if the phase order is correct
       /* Calculate Iq and Id currents at this moment*/
       sine_cosine_calc(controller.Electric_Angle);
       park_transform(controller.Sense1_mA, controller.Sense2_mA, &FOC.Id, &FOC.Iq);
-      controller.temp_var_offset_calib = Calibrate_Angle_Offset2();
+      controller.temp_var_offset_calib = Calibrate_Angle_Offset_Align();
       if (controller.temp_var_offset_calib == 0)
       {
         Phase_step = 4;
@@ -1153,7 +1511,7 @@ Check if the phase order is correct
         Phase_order_step = 0;
         controller.Kt_cal_status = 1;
         controller.Phase_order_status = 1;
-        // controller.Calib_error = 1;
+        controller.Calib_error = 1; // clean abort: alignment could not satisfy +Iq -> +encoder
       }
       break;
 
@@ -2213,11 +2571,24 @@ void Open_loop_move_steps(int steps, int voltage, int microsteps_per_cycle, int 
 
 void Phase_order()
 {
-
-  pwm_set(PWM_CH1, FOC.PWM1, 13);
-  pwm_set(PWM_CH2, FOC.PWM2, 13);
-  pwm_set(PWM_CH3, FOC.PWM3, 13);
-  pwm_set(PWM_CH4, FOC.PWM4, 13);
+  if (controller.commutation_dir < 0)
+  {
+    // Reversed wiring compensated as a phase-B negation (a guaranteed reflection): swap the two
+    // phase-B half-bridges, which flips the sign of the phase-B drive. Matches the Sense2
+    // negation in Collect_data, so a reversed motor becomes a normally-wired (proper-rotation)
+    // one and calibrates like the forward config. Phase A (CH3/CH4) is left untouched.
+    pwm_set(PWM_CH1, FOC.PWM2, 13);
+    pwm_set(PWM_CH2, FOC.PWM1, 13);
+    pwm_set(PWM_CH3, FOC.PWM3, 13);
+    pwm_set(PWM_CH4, FOC.PWM4, 13);
+  }
+  else
+  {
+    pwm_set(PWM_CH1, FOC.PWM1, 13);
+    pwm_set(PWM_CH2, FOC.PWM2, 13);
+    pwm_set(PWM_CH3, FOC.PWM3, 13);
+    pwm_set(PWM_CH4, FOC.PWM4, 13);
+  }
 }
 
 void Brake_Coast()

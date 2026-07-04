@@ -174,6 +174,8 @@ void read_config()
   controller.Max_Vbus = readInt(VOLTAGE_ERROR);
   PID.Voltage_limit = readInt(VOLTAGE_LIMIT);
   controller.theta_offset = readFloat(THETA_OFFSET);
+  // Stored as 2 = reversed, anything else (incl. erased 0xFFFFFFFF on legacy boards) = forward (+1)
+  controller.commutation_dir = (readInt(COMMUTATION_DIR_EEPROM) == 2) ? -1 : 1;
 
 }
 
@@ -237,6 +239,7 @@ void Write_config()
   writeInt(VOLTAGE_ERROR,controller.Max_Vbus);
   writeFloat(THETA_OFFSET, controller.theta_offset);
   writeInt(VOLTAGE_LIMIT,PID.Voltage_limit);
+  writeInt(COMMUTATION_DIR_EEPROM, (controller.commutation_dir < 0) ? 2 : 1);
 
 }
 
@@ -248,7 +251,7 @@ void Set_Default_config(){
   writeInt(BATCH_DATA_EEPROM, 125);
 
   writeInt(CAN_ID_EEPROM, 0);
-  writeInt(SOFTWARE_VERSION_EEPROM, 103);
+  writeInt(SOFTWARE_VERSION_EEPROM, 105);
   writeInt(LED_ON_OFF_EEPROM, 1);
   writeInt(THERMISTOR_ON_OFF_EEPROM, 0);
   writeInt(POLE_PAIR, 0);
@@ -290,6 +293,7 @@ void Set_Default_config(){
   writeInt(VOLTAGE_ERROR,29000);
   writeFloat(THETA_OFFSET, 0);
   writeInt(VOLTAGE_LIMIT,6000);
+  writeInt(COMMUTATION_DIR_EEPROM, 1);
 
   read_config();
 

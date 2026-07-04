@@ -966,6 +966,12 @@ void UART_protocol(Stream &Serialport)
                 Serialport.println(controller.DIR_);
                 Serialport.print("Phase Order: ");
                 Serialport.println(controller.Phase_order);
+                Serialport.print("Commutation dir: ");
+                Serialport.println(controller.commutation_dir);
+                Serialport.print("Calib fwd/rev speed: ");
+                Serialport.print(controller.Velocity_fwd);
+                Serialport.print(" / ");
+                Serialport.println(controller.Velocity_bwd);
                 Serialport.print("Number of pole pairs: ");
                 Serialport.println(controller.pole_pairs);
                 Serialport.print("Angle offset is: ");

@@ -68,6 +68,7 @@ void Brake_Coast();
 void Hall_Indexing_mode();
 int Calibrate_Angle_Offset();
 int Calibrate_Angle_Offset2();
+int Calibrate_Angle_Offset_Align();
 
 
 #endif
