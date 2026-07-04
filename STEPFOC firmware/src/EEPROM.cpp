@@ -133,7 +133,9 @@ void read_config()
   if (!spectral_can_id_int_is_valid(controller.CAN_ID)) {
     controller.CAN_ID = 0;
   }
-  controller.SOFTWARE_VERSION = readInt(SOFTWARE_VERSION_EEPROM);
+  // Report the firmware's own build version, not the (possibly stale) value in EEPROM.
+  // This way #Info reflects the flashed firmware immediately, without needing a #Default.
+  controller.SOFTWARE_VERSION = FIRMWARE_VERSION;
   controller.LED_ON_OFF = readInt(LED_ON_OFF_EEPROM);
   controller.Thermistor_on_off = readInt(THERMISTOR_ON_OFF_EEPROM);
   controller.pole_pairs = readInt(POLE_PAIR);
@@ -251,7 +253,7 @@ void Set_Default_config(){
   writeInt(BATCH_DATA_EEPROM, 125);
 
   writeInt(CAN_ID_EEPROM, 0);
-  writeInt(SOFTWARE_VERSION_EEPROM, 105);
+  writeInt(SOFTWARE_VERSION_EEPROM, FIRMWARE_VERSION);
   writeInt(LED_ON_OFF_EEPROM, 1);
   writeInt(THERMISTOR_ON_OFF_EEPROM, 0);
   writeInt(POLE_PAIR, 0);
