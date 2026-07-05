@@ -19,8 +19,12 @@
 #include "CAN.h"
 #include "communication_CAN.h"
 #include "bootloader_config.h"
+#include <IWatchdog.h>
 
 // Define serial port
+#ifdef Serial
+#undef Serial // Arduino core's WSerial.h also defines Serial (as Serial2); this board uses Serialx
+#endif
 #define Serial Serialx
 HardwareSerial Serialx(RX_COM, TX_COM); // PA3, PA2 RX,TX
 
@@ -87,6 +91,12 @@ void setup()
   delay(20);
 
   Setup_CAN_bus();
+
+  // Hardware watchdog: resets the board if the control ISR ever stops running
+  // (e.g. a wedged loop) instead of leaving PWM driving stale duty indefinitely.
+  // Kicked every tick from IT_callback()/Update_IT_callback_calib(), so 100ms is
+  // a wide margin under normal operation but catches a real hang quickly.
+  IWatchdog.begin(100000);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -106,11 +116,15 @@ void loop()
 
   if ((ms - last_time) > 500) // run every x ms
   {
-    /*
-
-        Serial.println(controller.execution_time);
-
-    */
+    // The angle-offset lock+sweep (Calibrate_Angle_Offset_Align) can run for tens of
+    // seconds with no other serial output; let the user know it's still progressing.
+    if (controller.Align_stage > 0)
+    {
+      Serial.print("Calibrating angle offset... stage ");
+      Serial.print(controller.Align_stage);
+      Serial.print("/13, sweep point ");
+      Serial.println(controller.Align_point);
+    }
 
     last_time = ms;
   }
@@ -127,7 +141,10 @@ void loop()
   /*
   HANDLE CAN BUS
   */
-  CAN_protocol(Serial);
-  CAN_heartbeat(ms);
-  CAN_watchdog(ms);
+  if (controller.CAN_init_error == 0)
+  {
+    CAN_protocol(Serial);
+    CAN_heartbeat(ms);
+    CAN_watchdog(ms);
+  }
 }

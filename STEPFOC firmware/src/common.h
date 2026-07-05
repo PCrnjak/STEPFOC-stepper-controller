@@ -151,6 +151,7 @@ typedef struct
     // 0x0 - 0xF in hexadecimal system (HEX)
     volatile int CAN_ID = 0; // CAN id of THIS motor driver! No 2 motor drivers can share the same ID.
     volatile bool Wrong_DL = 0;
+    volatile bool CAN_init_error = 0; // Set if CAN peripheral failed to initialize; CAN bus is skipped, UART stays usable
 
     // temporary test variables
     volatile float temp = 0;
@@ -181,6 +182,11 @@ typedef struct
     volatile bool calib_reset = false;
     volatile int Velocity_fwd = 0;
     volatile int Velocity_bwd = 0;
+
+    // Progress telemetry for Calibrate_Angle_Offset_Align(), so the ~seconds-long lock+sweep
+    // stage isn't silent on the serial console. 0 = not running. Printed periodically by loop().
+    volatile int Align_stage = 0;
+    volatile int Align_point = 0;
 
     // Open loop movements
     volatile int microstep = 16;
@@ -258,42 +264,45 @@ typedef struct
     volatile int Reset_integral_accumulator = 0;
 
     // Position loop PID
-    volatile float Kp_p = 12;
+    // NOTE: these initializers are only ever visible before setup() calls read_config();
+    // they are kept in sync with Set_Default_config() (EEPROM.cpp) which is the value a
+    // real board gets on #Default / factory reset. Update both together.
+    volatile float Kp_p = 5;
     volatile int Position_setpoint = 0;
     volatile float P_errSum = 0;
 
     // Speed loop PID
-    volatile float Kp_v = 0.006;  //   0.006 basic values that work for most motors but not optimal 0.01
-    volatile float Ki_v = 0.0001; //   0.0001 basic values that work for most motors but not optimal 0.0005
+    volatile float Kp_v = 0.007;  //   basic values that work for most motors but not optimal
+    volatile float Ki_v = 0.0005; //   basic values that work for most motors but not optimal
     volatile float V_errSum = 0;
     volatile float Feedforward_speed = 0;
     volatile float Velocity_setpoint = 0; // -1.5
 
-    volatile float Velocity_limit = 72000;          // Clamp integrals to this  [TICKS/s]
+    volatile float Velocity_limit = 800000;         // Clamp integrals to this  [TICKS/s]
     volatile float Velocity_limit_error = 30000000; // [TICKS/s] ; Velocity when we will report error / For stepper speed runout is around 250 nfo000
 
     // current loop PID
     volatile float Ki = 0; // zero location
 
-    volatile float Kp_id = 3;   // 3; motor1
-    volatile float Ki_id = 0.7; // 0.7; motor1
+    volatile float Kp_id = 7; // motor1
+    volatile float Ki_id = 3; // motor1
     volatile float Id_errSum;
     volatile float Id_setpoint = 0;
 
-    volatile float Kp_iq = 3;   // 3; motor1
-    volatile float Ki_iq = 0.7; // 0.7; motor1
+    volatile float Kp_iq = 3;   // motor1
+    volatile float Ki_iq = 0.3; // motor1
     volatile float Iq_errSum;
     volatile float Iq_setpoint;
 
-    volatile float Iq_current_limit = 2800;
+    volatile float Iq_current_limit = 1700;
     volatile float Id_current_limit = 0;
 
     volatile float Feedforward_current = 0;
 
     // PD loop (Impedance controller)
     // https://en.wikipedia.org/wiki/Impedance_control
-    volatile float KD = 0.002800; //  [Nm*s/rad]  KD 0.002800
-    volatile float KP = 0.07000;  //  [Nm/rad] KP 0.14000
+    volatile float KD = 0.0028; //  [Nm*s/rad]
+    volatile float KP = 0.1400; //  [Nm/rad]
 
     volatile int Uq_setpoint = 0;
     volatile int Ud_setpoint = 0;

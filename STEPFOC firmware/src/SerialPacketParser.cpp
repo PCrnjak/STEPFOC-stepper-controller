@@ -34,6 +34,7 @@ bool SerialPacketParser::parse(char c, char *command, char *argument)
   {
     bufferIndex = 0;
     packetComplete = false;
+    lastCommandUnknown = false;
   }
 
   if (bufferIndex < sizeof(buffer) - 1)
@@ -305,6 +306,10 @@ bool SerialPacketParser::parse(char c, char *command, char *argument)
         {
           return true;
         }
+        else if (strcmp(command, "Help") == 0)
+        {
+          return true;
+        }
         else if (strcmp(command, "Vlimit") == 0)
         {
           return true;
@@ -408,6 +413,7 @@ bool SerialPacketParser::parse(char c, char *command, char *argument)
         else
         {
           // Unknown command
+          lastCommandUnknown = true;
           resetCommandAndArgument(command, argument);
           return false;
         }
@@ -415,6 +421,7 @@ bool SerialPacketParser::parse(char c, char *command, char *argument)
       else
       {
         // Combined length of command and argument exceeds 20 characters
+        lastCommandUnknown = true;
         resetCommandAndArgument(command, argument);
         return false;
       }
@@ -679,6 +686,10 @@ bool SerialPacketParser::parse(char c, char *command, char *argument)
         {
           return true;
         }
+        else if (strcmp(command, "Help") == 0)
+        {
+          return true;
+        }
         else if (strcmp(command, "Vlimit") == 0)
         {
           return true;
@@ -782,6 +793,7 @@ bool SerialPacketParser::parse(char c, char *command, char *argument)
         else
         {
           // Unknown command
+          lastCommandUnknown = true;
           resetCommandAndArgument(command, argument);
           return false;
         }
@@ -789,6 +801,7 @@ bool SerialPacketParser::parse(char c, char *command, char *argument)
       else
       {
         // Command length exceeds 20 characters
+        lastCommandUnknown = true;
         resetCommandAndArgument(command, argument);
         return false;
       }
@@ -796,6 +809,7 @@ bool SerialPacketParser::parse(char c, char *command, char *argument)
     else
     {
       // Invalid command or argument
+      lastCommandUnknown = true;
       resetCommandAndArgument(command, argument);
       return false;
     }

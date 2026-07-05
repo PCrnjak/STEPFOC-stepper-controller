@@ -726,6 +726,10 @@ void UART_protocol(Stream &Serialport)
                 {
                     Serialport.println("Vbus error ");
                 }
+                if (controller.Driver_error == 1)
+                {
+                    Serialport.println("Driver error (undervoltage, thermal shutdown, or overcurrent) ");
+                }
                 if (controller.Velocity_error == 1)
                 {
                     Serialport.println("Velocity error ");
@@ -928,6 +932,42 @@ void UART_protocol(Stream &Serialport)
                 Serialport.println(controller.Phase_voltage);
             }
 
+            // Print a summary of available commands
+            else if (strcmp(command, "Help") == 0)
+            {
+                Serialport.println("--- STEPFOC command reference ---");
+                Serialport.println("Usage: #<Command> [value]  (omit value to query current)");
+                Serialport.println("");
+                Serialport.println("Motion / control mode:");
+                Serialport.println("  Iq <mA>      Torque mode, set Iq setpoint");
+                Serialport.println("  Id <mA>      Set Id setpoint");
+                Serialport.println("  V <ticks/s>  Velocity mode setpoint");
+                Serialport.println("  P <ticks>    Position mode setpoint");
+                Serialport.println("  PD <ticks>   Impedance (PD) mode setpoint");
+                Serialport.println("  Uq/Ud <mV>   Voltage-torque mode");
+                Serialport.println("  Idle         Go to idle");
+                Serialport.println("  Brake/Coast  Brake or coast the motor");
+                Serialport.println("");
+                Serialport.println("Calibration:");
+                Serialport.println("  Cal          Run full calibration");
+                Serialport.println("  Calangle     Run angle-offset calibration only");
+                Serialport.println("  R/L <ohm/H>  Set phase resistance/inductance before Cal");
+                Serialport.println("  PP <n>       Set pole pairs before Cal");
+                Serialport.println("  Save         Save current config to EEPROM");
+                Serialport.println("  Default      Reset config to factory defaults");
+                Serialport.println("");
+                Serialport.println("Gains (get/set with #<name> <value>):");
+                Serialport.println("  Kpp Kpv Kiv Kpiq Kiiq Kpid Kiid KP KD Vlim Ilim");
+                Serialport.println("");
+                Serialport.println("Status:");
+                Serialport.println("  Info         Full driver/motor status dump");
+                Serialport.println("  Error        Decoded error flags");
+                Serialport.println("  Clear        Clear all errors, go idle");
+                Serialport.println("  CANID <id>   Get/set CAN node ID");
+                Serialport.println("");
+                Serialport.println("See communication.cpp for the complete command list.");
+            }
+
             // Print Information about motor driver and motor
             else if (strcmp(command, "Info") == 0)
             {
@@ -938,6 +978,9 @@ void UART_protocol(Stream &Serialport)
                 Serialport.println(controller.BATCH_DATE);
                 Serialport.print("Software version: ");
                 Serialport.println(controller.SOFTWARE_VERSION);
+                Serialport.print("ISR execution time: ");
+                Serialport.print(controller.execution_time);
+                Serialport.println(" us");
                 Serialport.print("CAN ID is: ");
                 Serialport.println(controller.CAN_ID);
                 if (controller.Calibrated == 0)
@@ -1429,6 +1472,13 @@ void UART_protocol(Stream &Serialport)
 
             parser.resetCommandAndArgument(command, argument);
             break;
+        }
+        else if (parser.lastCommandUnknown)
+        {
+            // A complete line was received but rejected by the parser itself (not in its
+            // whitelist, or malformed) -- give feedback instead of silently doing nothing.
+            parser.lastCommandUnknown = false;
+            Serialport.println("Unknown command");
         }
     }
 }

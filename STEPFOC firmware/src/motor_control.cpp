@@ -29,6 +29,7 @@
 #include <SPI.h>
 #include "common.h"
 #include "foc.h"
+#include <IWatchdog.h>
 
 #define TIMING_DEBUG 0
 
@@ -104,7 +105,7 @@ void Collect_data()
     controller.Sense2_mA = -controller.Sense2_mA;
   }
 
-  controller.VBUS_mV = Get_voltage_mA(controller.VBUS_RAW);
+  controller.VBUS_mV = Get_voltage_mV(controller.VBUS_RAW);
   /***********************************/
 
   /* Handle encoder full rotation overflow*/
@@ -122,8 +123,9 @@ void Collect_data()
   controller.Position_Ticks = controller.Position_Raw + (controller.ROTATIONS * CPR);
   /***********************************/
 
-  /* Calculate velocity in ticks/s */
-  controller.Velocity = (controller.Position_Ticks - controller.Old_Position_Ticks) / LOOP_TIME;
+  /* Calculate velocity in ticks/s. Integer multiply by LOOP_FREQ instead of dividing
+     by the float LOOP_TIME -- same result (LOOP_TIME == 1/LOOP_FREQ), no soft-float divide. */
+  controller.Velocity = (controller.Position_Ticks - controller.Old_Position_Ticks) * LOOP_FREQ;
   /* Moving average filter on the velocity */
   controller.Velocity_Filter = movingAverage(controller.Velocity);
   /***********************************/
@@ -217,7 +219,7 @@ void Collect_data2()
     controller.Sense2_mA = -controller.Sense2_mA;
   }
 
-  controller.VBUS_mV = Get_voltage_mA(controller.VBUS_RAW);
+  controller.VBUS_mV = Get_voltage_mV(controller.VBUS_RAW);
   /***********************************/
 
   /* Handle encoder full rotation overflow*/
@@ -235,8 +237,9 @@ void Collect_data2()
   controller.Position_Ticks = controller.Position_Raw + (controller.ROTATIONS * CPR);
   /***********************************/
 
-  /* Calculate velocity in ticks/s */
-  controller.Velocity = (controller.Position_Ticks - controller.Old_Position_Ticks) / LOOP_TIME;
+  /* Calculate velocity in ticks/s. Integer multiply by LOOP_FREQ instead of dividing
+     by the float LOOP_TIME -- same result (LOOP_TIME == 1/LOOP_FREQ), no soft-float divide. */
+  controller.Velocity = (controller.Position_Ticks - controller.Old_Position_Ticks) * LOOP_FREQ;
   /* Moving average filter on the velocity */
   controller.Velocity_Filter = movingAverage(controller.Velocity);
   /***********************************/
@@ -316,9 +319,11 @@ void Get_first_encoder()
 /// @brief Interrupt callback routine for FOC mode
 void IT_callback(void)
 {
-#if (TIMING_DEBUG > 0)
+  IWatchdog.reload();
+
+  // Always measured (cheap: 2x micros() + subtract) so execution_time is available live
+  // via #Info without needing to recompile with TIMING_DEBUG.
   int c = micros();
-#endif
 
   /*Sample temperature every 15000 ticks; If enabled*/
   if (controller.Thermistor_on_off == 1)
@@ -465,10 +470,8 @@ void IT_callback(void)
     Brake_Coast();
   }
 
-#if (TIMING_DEBUG > 0)
   int c2 = micros();
   controller.execution_time = c2 - c;
-#endif
 }
 
 /// @brief Non-blocking self-calibration of theta_offset
@@ -914,8 +917,14 @@ int Calibrate_Angle_Offset_Align()
     st = cnt = cyc = retry = 0;
     off_a = off_b = vel_accum = 0.0f;
     lock_v = 0;
+    controller.Align_stage = 0;
     return FAILED;
   }
+
+  // Progress telemetry (see common.h): st (0-12) as the stage number, sweep_index as the
+  // point within the coarse/fine sweep. Printed periodically by loop(), see main.cpp.
+  controller.Align_stage = st + 1;
+  controller.Align_point = sweep_index;
 
   switch (st)
   {
@@ -1036,6 +1045,7 @@ int Calibrate_Angle_Offset_Align()
         st = cnt = cyc = retry = 0;
         off_a = off_b = vel_accum = 0.0f;
         lock_v = 0;
+        controller.Align_stage = 0;
         return FAILED;
       }
     }
@@ -1149,6 +1159,7 @@ int Calibrate_Angle_Offset_Align()
           lock_v = 0;
           sweep_index = 0;
           sweep_stage = 0;
+          controller.Align_stage = 0;
           return DONE;
         }
       }
@@ -1171,6 +1182,7 @@ int Calibrate_Angle_Offset_Align()
 /// Will exit if there is an error and report it
 void Update_IT_callback_calib()
 {
+  IWatchdog.reload();
 
   /// Flags
   static int calib_step_pole_pair = 0;
@@ -1274,7 +1286,7 @@ Check if the Vbus is in the range
   if (calib_step_voltage == 0 && calib_step_magnet == 1 && controller.Calib_error == 0)
   {
     controller.VBUS_RAW = ADC_CHANNEL_4_READ_VBUS();
-    controller.VBUS_mV = Get_voltage_mA(controller.VBUS_RAW);
+    controller.VBUS_mV = Get_voltage_mV(controller.VBUS_RAW);
     // If there is error
     if (controller.VBUS_mV < controller.Min_Vbus || controller.VBUS_mV > controller.Max_Vbus)
     {
@@ -2015,7 +2027,7 @@ float Get_current(int adc_value)
 /// @brief 41231 mV = 4095 ADC ticks => (41231/4095) = 10.06 = 10. Voltage_mv = ADC_tick * 10
 /// @param adc_value RAW ADC value
 /// @return Voltage in mv
-int Get_voltage_mA(int adc_value)
+int Get_voltage_mV(int adc_value)
 {
 
   int voltage = qfp_fmul(adc_value, 10);
@@ -2074,15 +2086,18 @@ void Voltage_Torque_mode()
 void Torque_mode()
 {
 
-  /* Clamp Iq to current limit*/
-  if (PID.Iq_setpoint > PID.Iq_current_limit)
-    PID.Iq_setpoint = PID.Iq_current_limit;
-  else if (PID.Iq_setpoint < -PID.Iq_current_limit)
-    PID.Iq_setpoint = -PID.Iq_current_limit;
+  /* Clamp Iq to current limit for the control math only; PID.Iq_setpoint keeps the
+     user's actual commanded value (e.g. reading back "#Iq" reflects what was asked
+     for, not a value silently overwritten by this clamp). */
+  float Iq_setpoint_clamped = PID.Iq_setpoint;
+  if (Iq_setpoint_clamped > PID.Iq_current_limit)
+    Iq_setpoint_clamped = PID.Iq_current_limit;
+  else if (Iq_setpoint_clamped < -PID.Iq_current_limit)
+    Iq_setpoint_clamped = -PID.Iq_current_limit;
 
   /* Current PIDS*/
   float Id_error = PID.Id_setpoint - FOC.Id;
-  float Iq_error = PID.Iq_setpoint - FOC.Iq;
+  float Iq_error = Iq_setpoint_clamped - FOC.Iq;
 
   PID.Id_errSum = PID.Id_errSum + Id_error * PID.Ki_id;
   PID.Iq_errSum = PID.Iq_errSum + Iq_error * PID.Ki_iq;
