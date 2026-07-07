@@ -11,6 +11,8 @@
 
 The controller features a 14-bit magnetic encoder, inline current sensing, CAN and UART interfaces, and supports position, velocity, torque, and impedance control modes.
 
+> [!NOTE]
+> You can now tune your motors via [https://motorgui.com/](https://motorgui.com/)
 
 > [!NOTE]
 > Optimized for NEMA17 format but it can also be attached to nema 23 and 14 steppers!
@@ -33,6 +35,7 @@ STEPFOC firmware is located [here](https://github.com/PCrnjak/STEPFOC-stepper-co
 - [Motor hardware setup guide](https://youtu.be/60UMc95H8iE)
 - [Official website](https://source-robotics.com/products/spectral-micro-bldc-controller)
 - [DOCS](https://source-robotics.github.io/STEPFOC-docs/) Offers great starting guides with project examples + code 
+- [https://motorgui.com/](https://motorgui.com/)
 
 
 ### API and control
