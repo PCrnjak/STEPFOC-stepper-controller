@@ -267,13 +267,13 @@ void CAN_protocol(Stream &Serialport)
 
             case IN_DATA_PACK_PD:{
 
-                
+
                 if(CAN_RX_msg.len == 8){
                     uint8_t temp_buffer[] =  {CAN_RX_msg.data[0], CAN_RX_msg.data[1], CAN_RX_msg.data[2]};
                     uint8_t temp_buffer1[] =  {CAN_RX_msg.data[3], CAN_RX_msg.data[4], CAN_RX_msg.data[5]};
                     uint8_t temp_buffer2[] =  {CAN_RX_msg.data[6], CAN_RX_msg.data[7]};
                     PID.Position_setpoint = three_bytes_to_int(temp_buffer);
-                    PID.Feedforward_speed = three_bytes_to_int(temp_buffer1);
+                    PID.Velocity_setpoint = three_bytes_to_int(temp_buffer1);
                     PID.Feedforward_current = two_bytes_to_int(temp_buffer2);
 
                     if (PID.Reset_integral_accumulator == 1)
@@ -506,6 +506,21 @@ void CAN_protocol(Stream &Serialport)
                 #if (DEBUG_COMS > 0)
                 Serialport.println("Received Idle");
                 #endif
+                break;
+            }
+
+            case IN_SETTINGS:{
+                #if (DEBUG_COMS > 0)
+                Serialport.println("Received Settings");
+                #endif
+                if (CAN_RX_msg.len >= 2){
+                    uint8_t mask  = CAN_RX_msg.data[0];
+                    uint8_t value = CAN_RX_msg.data[1];
+
+                    if (mask & SETTINGS_BIT_BRAKE_COAST){
+                        controller.brake_coast = (value & SETTINGS_BIT_BRAKE_COAST) ? 1 : 0;
+                    }
+                }
                 break;
             }
 

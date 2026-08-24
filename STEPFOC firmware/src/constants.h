@@ -23,7 +23,7 @@
 
 // Firmware/release version. BUMP THIS on every release so #Info reports the actual
 // firmware loaded (not a stale value from EEPROM). Should match the GitHub release tag (Vxxx).
-#define FIRMWARE_VERSION 106
+#define FIRMWARE_VERSION 107
 
 #define MAX_DRIVE_CURRENT 2800 // 2500 mA
 
@@ -210,6 +210,12 @@ CAN BUS CONSTANTS
 #define IN_IQ 21
 #define IN_KT 22
 #define IN_VLIM 34 // PID voltage limit (PID.Voltage_limit)
+
+// Generic settings command. data[0] = mask (which settings to write, 1 bit per setting),
+// data[1] = value (new value for each set bit). Bits not set in mask are left unchanged,
+// so a sender only needs to know about the bits it wants to touch.
+#define IN_SETTINGS 35
+#define SETTINGS_BIT_BRAKE_COAST (1 << 0) // 1 = brake, 0 = coast (controller.brake_coast)
 
 // INPUT CAN command IDS (Commands that spectral driver can receive)
 // To these commands spectral responds with specific command ID
