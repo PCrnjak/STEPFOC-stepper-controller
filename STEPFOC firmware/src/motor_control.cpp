@@ -1195,6 +1195,18 @@ void Update_IT_callback_calib()
   static int Phase_order_step = 0;
   static int KV_step = 0;
 
+  // Spin-confirm probe angle bias: this pre-check commands a pure-Uq voltage using
+  // Electric_Angle before theta_offset has been found, so how much of it lands on the
+  // true torque axis depends on this unit's (unknown) rotor-to-encoder mounting angle.
+  // Two trials 90 electrical degrees apart guarantee at least one lands within 45 degrees
+  // of the true q-axis (>=1/sqrt(2) ~= 70.7% of full command magnitude, for ANY true
+  // offset -- max(|cos|,|sin|) >= 1/sqrt(2) always), comfortably enough to move a motor
+  // that would otherwise fail this test outright at an unlucky angle. Safe to retry because
+  // Calibrate_Angle_Offset_Align() (below) locks to an absolute commanded field angle and
+  // reads theta_offset back from the raw encoder -- it doesn't depend on anything this
+  // pre-check assumed.
+  static int probe_attempt = 0;
+
   static int tick_cnt = 0;
   static float resistance_voltage = 0;
 
@@ -1423,6 +1435,8 @@ Check if the phase order is correct
   if (calib_dir_pole_pair == 1 && Phase_order_step == 0 && controller.Calib_error == 0)
   {
     Phase_ticks = Phase_ticks + 1;
+    // Which angle bias this attempt probes with -- see probe_attempt's declaration above.
+    float probe_bias = (probe_attempt == 0) ? 0.0f : (PI / 2.0f);
     switch (Phase_step)
     {
     case 0: // Small delay where the motor is stopped
@@ -1435,7 +1449,7 @@ Check if the phase order is correct
       else
       {
         Collect_data2();
-        sine_cosine_calc(controller.Electric_Angle);
+        sine_cosine_calc(controller.Electric_Angle + probe_bias);
         park_transform(controller.Sense1_mA, controller.Sense2_mA, &FOC.Id, &FOC.Iq);
         PID.Uq_setpoint = 0;
         Voltage_Torque_mode();
@@ -1456,7 +1470,7 @@ Check if the phase order is correct
       {
         Collect_data2();
         /* Calculate Iq and Id currents at this moment*/
-        sine_cosine_calc(controller.Electric_Angle);
+        sine_cosine_calc(controller.Electric_Angle + probe_bias);
         park_transform(controller.Sense1_mA, controller.Sense2_mA, &FOC.Id, &FOC.Iq);
         PID.Uq_setpoint = 3000;
         Voltage_Torque_mode();
@@ -1474,20 +1488,33 @@ Check if the phase order is correct
         if (abs(delta) > half_rotation_ticks)
         {
           // ✅ spun far enough (either direction)
+          probe_attempt = 0; // reset for the next #Cal run
           Phase_step = 3;
         }
         else
         {
-          // ❌ barely moved -> commutation genuinely not working
-          controller.Calib_error = 1;
+          controller.Spin_confirm_delta = delta;         // diagnostic, see Calib_report()
+          controller.Spin_confirm_vbus_mV = controller.VBUS_mV;
           PID.Uq_setpoint = 0;
           Voltage_Torque_mode();
           Phase_ticks = 0;
           Phase_start = 1;
           Phase_step = 0;
-          Phase_order_step = 0;
-          controller.Kt_cal_status = 1;
-          controller.Phase_order_status = 1;
+
+          if (probe_attempt == 0)
+          {
+            // This bias produced ~no motion -- try again 90 degrees away before giving up.
+            probe_attempt = 1;
+          }
+          else
+          {
+            // Both biases tried, neither moved the motor -> commutation genuinely not working.
+            probe_attempt = 0; // reset for the next #Cal run
+            Phase_order_step = 0;
+            controller.Kt_cal_status = 1;
+            controller.Phase_order_status = 1;
+            controller.Calib_error = 1;
+          }
         }
       }
 
@@ -1818,6 +1845,16 @@ void Calib_report(Stream &Serialport)
         Serialport.println(" ");
         Serialport.println("Phase order is wrong!");
         Serialport.println("Switch motor phases and try again!");
+        if (controller.Spin_confirm_delta != 0)
+        {
+          Serialport.print("Spin-confirm delta: ");
+          Serialport.print(controller.Spin_confirm_delta);
+          Serialport.print(" ticks (need > ");
+          Serialport.print(CPR / 2);
+          Serialport.print("), Vbus: ");
+          Serialport.print(controller.Spin_confirm_vbus_mV);
+          Serialport.println(" mV");
+        }
       }
       else if (controller.Phase_order_status == 2)
       {

@@ -140,6 +140,9 @@ typedef struct
     volatile int Phase_order_status = 0;
     volatile int KV_status = 0;
 
+    volatile int Spin_confirm_delta = 0;   // diagnostic: last "confirm commutation" spin delta (ticks), on failure
+    volatile int Spin_confirm_vbus_mV = 0; // diagnostic: VBUS_mV sampled at that same failure
+
     // Cyclic UART
     volatile int cyclic = 0;        // If 1 we Periodically send messages without request from host.
     volatile int cyclic_a = 0;      // If 1 we Periodically send messages without request from host.

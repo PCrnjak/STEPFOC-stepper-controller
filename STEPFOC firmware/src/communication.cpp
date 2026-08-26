@@ -495,6 +495,7 @@ void UART_protocol(Stream &Serialport)
                     controller.sleep_pin_state = 1;
                 }
                 controller.Calibration = 1;
+                controller.Spin_confirm_delta = 0; // diagnostic: clear any stale value from a prior #Cal attempt
                 Ticker_detach(TIM3);
                 Ticker_init(TIM3, LOOP_FREQ, Update_IT_callback_calib);
             }
